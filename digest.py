@@ -592,7 +592,7 @@ def send_email(subject, html_body):
     smtp_host = os.environ["SMTP_HOST"]
     smtp_port = int(os.environ.get("SMTP_PORT", "587"))
     smtp_user = os.environ["SMTP_USER"]  
-    smtp_pass = os.environ["SMTP_PASS"] # "pxlmmacytkgxcaaj"
+    smtp_pass = os.environ["SMTP_PASS"] # 
     to_addr = os.environ["EMAIL_TO"] # 131
 
     msg = MIMEMultipart("alternative")
