@@ -1,0 +1,32 @@
+name: Daily Pain-Point Digest
+
+on:
+  schedule:
+    # 每天 UTC 13:00 跑 (≈ 北京时间 21:00, 美东上午 9 点)
+    # 改时间就改这个 cron
+    - cron: '0 13 * * *'
+  workflow_dispatch:  # 允许在 GitHub 页面手动触发,方便首次测试
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run digest
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: python digest.py
