@@ -23,10 +23,12 @@ jobs:
 
       - name: Run digest
         env:
-          DEEPSEEK_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          PROXY: ${{ secrets.PROXY }}
+          PGSQL_URL: ${{ secrets.PGSQL_URL }}
         run: python digest.py

@@ -14,6 +14,15 @@ from email.mime.multipart import MIMEMultipart
 import requests
 from anthropic import Anthropic
 
+# 全局代理配置 (如果环境变量中配置了 PROXY)
+GLOBAL_PROXIES = None
+proxy_url = os.environ.get("PROXY")
+if proxy_url:
+    GLOBAL_PROXIES = {
+        "http": proxy_url,
+        "https": proxy_url
+    }
+
 # ---------- Config ----------
 SUBREDDITS = ["webdev", "SaaS", "indiehackers", "Entrepreneur", "SideProject", "macapps"]
 HN_STORIES_LIMIT = 100  # newest stories to scan
@@ -45,57 +54,97 @@ PAIN_KEYWORDS = [
 USER_AGENT = "PainPointDigest/1.0 (personal research tool)"
 
 
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
+
 # ---------- Database ----------
+def get_db_conn():
+    """获取数据库连接，优先使用 PostgreSQL，否则降级使用 SQLite"""
+    pg_url = os.environ.get("PGSQL_URL")
+    if pg_url:
+        if psycopg2 is None:
+            raise ImportError("请安装 psycopg2 以使用 PostgreSQL: pip install psycopg2-binary")
+        return psycopg2.connect(pg_url), "pg"
+    return sqlite3.connect('pain_points.db'), "sqlite"
+
 def init_db():
-    conn = sqlite3.connect('pain_points.db')
+    conn, db_type = get_db_conn()
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS pain_points
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  source TEXT, url TEXT UNIQUE, title TEXT,
-                  pain TEXT, product_idea TEXT, score INTEGER,
-                  is_b2b BOOLEAN, created_at DATETIME)''')
+    if db_type == "pg":
+        c.execute('''CREATE TABLE IF NOT EXISTS pain_points
+                     (id SERIAL PRIMARY KEY,
+                      source TEXT, url TEXT UNIQUE, title TEXT,
+                      pain TEXT, product_idea TEXT, score INTEGER,
+                      is_b2b BOOLEAN, created_at TIMESTAMP)''')
+    else:
+        c.execute('''CREATE TABLE IF NOT EXISTS pain_points
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      source TEXT, url TEXT UNIQUE, title TEXT,
+                      pain TEXT, product_idea TEXT, score INTEGER,
+                      is_b2b BOOLEAN, created_at DATETIME)''')
     conn.commit()
     conn.close()
 
 def save_to_db(results):
-    conn = sqlite3.connect('pain_points.db')
+    conn, db_type = get_db_conn()
     c = conn.cursor()
     now = datetime.now(timezone.utc).isoformat()
     for r in results:
         try:
-            c.execute('''INSERT OR IGNORE INTO pain_points 
-                         (source, url, title, pain, product_idea, score, is_b2b, created_at)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                      (r['source'], r['url'], r['title'], r.get('pain', ''), 
-                       r.get('product_idea', ''), r.get('score', 0), 
-                       r.get('is_b2b', False), now))
-        except Exception:
-            pass
+            if db_type == "pg":
+                c.execute('''INSERT INTO pain_points 
+                             (source, url, title, pain, product_idea, score, is_b2b, created_at)
+                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                             ON CONFLICT (url) DO NOTHING''',
+                          (r['source'], r['url'], r['title'], r.get('pain', ''), 
+                           r.get('product_idea', ''), r.get('score', 0), 
+                           bool(r.get('is_b2b', False)), now))
+            else:
+                c.execute('''INSERT OR IGNORE INTO pain_points 
+                             (source, url, title, pain, product_idea, score, is_b2b, created_at)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                          (r['source'], r['url'], r['title'], r.get('pain', ''), 
+                           r.get('product_idea', ''), r.get('score', 0), 
+                           bool(r.get('is_b2b', False)), now))
+        except Exception as e:
+            print(f"[DB] Insert error: {e}")
     conn.commit()
     conn.close()
 
 def get_recent_pain_points(days=7):
-    conn = sqlite3.connect('pain_points.db')
+    conn, db_type = get_db_conn()
     c = conn.cursor()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    c.execute("SELECT pain, product_idea FROM pain_points WHERE created_at >= ?", (cutoff,))
+    
+    if db_type == "pg":
+        c.execute("SELECT pain, product_idea FROM pain_points WHERE created_at >= %s", (cutoff,))
+    else:
+        c.execute("SELECT pain, product_idea FROM pain_points WHERE created_at >= ?", (cutoff,))
+        
     rows = c.fetchall()
     conn.close()
     return [{"pain": r[0], "product_idea": r[1]} for r in rows]
 
 def get_monthly_stats():
-    conn = sqlite3.connect('pain_points.db')
+    conn, db_type = get_db_conn()
     c = conn.cursor()
     # Get the start of the current month
     first_day_of_month = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
     
-    # Count total pain points saved this month
-    c.execute("SELECT COUNT(*) FROM pain_points WHERE created_at >= ?", (first_day_of_month,))
-    total_points = c.fetchone()[0]
-    
-    # Count B2B pain points
-    c.execute("SELECT COUNT(*) FROM pain_points WHERE created_at >= ? AND is_b2b = 1", (first_day_of_month,))
-    b2b_points = c.fetchone()[0]
+    if db_type == "pg":
+        c.execute("SELECT COUNT(*) FROM pain_points WHERE created_at >= %s", (first_day_of_month,))
+        total_points = c.fetchone()[0]
+        
+        c.execute("SELECT COUNT(*) FROM pain_points WHERE created_at >= %s AND is_b2b = TRUE", (first_day_of_month,))
+        b2b_points = c.fetchone()[0]
+    else:
+        c.execute("SELECT COUNT(*) FROM pain_points WHERE created_at >= ?", (first_day_of_month,))
+        total_points = c.fetchone()[0]
+        
+        c.execute("SELECT COUNT(*) FROM pain_points WHERE created_at >= ? AND is_b2b = 1", (first_day_of_month,))
+        b2b_points = c.fetchone()[0]
     
     conn.close()
     return total_points, b2b_points
@@ -110,6 +159,7 @@ def fetch_hn():
             "https://hn.algolia.com/api/v1/search_by_date",
             params={"tags": "ask_hn", "hitsPerPage": 50},
             timeout=15,
+            proxies=GLOBAL_PROXIES
         )
         for hit in r.json().get("hits", []):
             text = (hit.get("title") or "") + " " + (hit.get("story_text") or "")
@@ -136,6 +186,7 @@ def fetch_reddit(subreddit):
             params={"limit": 100},
             headers={"User-Agent": USER_AGENT},
             timeout=15,
+            proxies=GLOBAL_PROXIES
         )
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)).timestamp()
         for post in r.json().get("data", {}).get("children", []):
@@ -166,6 +217,7 @@ def fetch_indiehackers():
             "https://www.indiehackers.com/feed.xml",
             headers={"User-Agent": USER_AGENT},
             timeout=15,
+            proxies=GLOBAL_PROXIES
         )
         root = ET.fromstring(r.content)
         # RSS items live under channel/item
@@ -209,6 +261,7 @@ def fetch_v2ex():
                 f"https://www.v2ex.com/api/topics/show.json?node_name={node}",
                 headers={"User-Agent": USER_AGENT},
                 timeout=15,
+                proxies=GLOBAL_PROXIES
             )
             # V2EX API returns a list of topics
             topics = r.json()
@@ -248,6 +301,7 @@ def fetch_producthunt():
             "https://www.producthunt.com/feed?category=discussions",
             headers={"User-Agent": USER_AGENT},
             timeout=15,
+            proxies=GLOBAL_PROXIES
         )
         root = ET.fromstring(r.content)
         for item in root.iter("item"):
@@ -291,6 +345,7 @@ def fetch_devto():
                 params={"tag": tag, "top": 1},  # Get recent popular/relevant posts in these tags
                 headers={"User-Agent": USER_AGENT},
                 timeout=15,
+                proxies=GLOBAL_PROXIES
             )
             articles = r.json()
             if not isinstance(articles, list):
@@ -342,6 +397,7 @@ def fetch_github_discussions():
                 f"https://github.com/{repo}/discussions.atom",
                 headers={"User-Agent": USER_AGENT},
                 timeout=15,
+                proxies=GLOBAL_PROXIES
             )
             if r.status_code != 200:
                 continue
@@ -619,7 +675,7 @@ def send_wechat_serverchan(title, markdown_body):
         "desp": markdown_body
     }
     try:
-        requests.post(url, data=data, timeout=10)
+        requests.post(url, data=data, timeout=10, proxies=GLOBAL_PROXIES)
         print("已推送到微信 (Server酱)")
     except Exception as e:
         print(f"微信推送失败: {e}")
@@ -639,7 +695,7 @@ def send_wechat_pushplus(title, markdown_body):
         "template": "markdown"
     }
     try:
-        requests.post(url, json=data, timeout=10)
+        requests.post(url, json=data, timeout=10, proxies=GLOBAL_PROXIES)
         print("已推送到微信 (PushPlus)")
     except Exception as e:
         print(f"微信推送失败 (PushPlus): {e}")
@@ -663,10 +719,28 @@ def send_wechat_work(title, markdown_body):
         }
     }
     try:
-        requests.post(url, json=data, timeout=10)
+        requests.post(url, json=data, timeout=10, proxies=GLOBAL_PROXIES)
         print("已推送到企业微信")
     except Exception as e:
         print(f"企业微信推送失败: {e}")
+
+def send_wechat_clawbot(markdown_body):
+    """通过 Clawbot 推送到微信文件传输助手/特定联系人"""
+    # Clawbot 需要运行在本地的代理/服务，通常通过给定的 URL/Token 触发
+    # 假设它是提供了一个标准的 HTTP POST 接口，这里提供一个通用的接入方式
+    webhook_url = os.environ.get("CLAWBOT_WEBHOOK_URL")
+    if not webhook_url:
+        return
+        
+    data = {
+        "msg_type": "text", # 很多非官方微信机器人只支持纯文本，如果支持 markdown 可修改
+        "content": markdown_body 
+    }
+    try:
+        requests.post(webhook_url, json=data, timeout=10, proxies=GLOBAL_PROXIES)
+        print("已推送到微信 (Clawbot)")
+    except Exception as e:
+        print(f"微信推送失败 (Clawbot): {e}")
 
 def build_markdown_for_wechat(results, conclusion, trends, monthly_total, monthly_b2b):
     """生成适用于微信推送的 Markdown 格式"""
@@ -764,6 +838,12 @@ def main():
         
     if os.environ.get("WECHAT_WORK_WEBHOOK_KEY"):
         send_wechat_work(wx_title, wx_md)
+        
+    if os.environ.get("CLAWBOT_WEBHOOK_URL"):
+        # 由于微信原生不支持Markdown渲染，在推给Clawbot时，你可以选择推原生Markdown，或者做一个纯文本去标签处理
+        # 这里直接传入包含标题的拼接文本
+        clawbot_text = f"【{wx_title}】\n\n{wx_md}"
+        send_wechat_clawbot(clawbot_text)
 
 if __name__ == "__main__":
     main()
