@@ -663,124 +663,6 @@ def send_email(subject, html_body):
         s.send_message(msg)
 
 
-def send_wechat_serverchan(title, markdown_body):
-    """通过 Server酱 推送到微信"""
-    sendkey = os.environ.get("SERVERCHAN_SENDKEY")
-    if not sendkey:
-        return
-        
-    url = f"https://sctapi.ftqq.com/{sendkey}.send"
-    data = {
-        "title": title,
-        "desp": markdown_body
-    }
-    try:
-        requests.post(url, data=data, timeout=10, proxies=GLOBAL_PROXIES)
-        print("已推送到微信 (Server酱)")
-    except Exception as e:
-        print(f"微信推送失败: {e}")
-
-
-def send_wechat_pushplus(title, markdown_body):
-    """通过 PushPlus 推送到微信"""
-    token = os.environ.get("PUSHPLUS_TOKEN")
-    if not token:
-        return
-        
-    url = "http://www.pushplus.plus/send"
-    data = {
-        "token": token,
-        "title": title,
-        "content": markdown_body,
-        "template": "markdown"
-    }
-    try:
-        requests.post(url, json=data, timeout=10, proxies=GLOBAL_PROXIES)
-        print("已推送到微信 (PushPlus)")
-    except Exception as e:
-        print(f"微信推送失败 (PushPlus): {e}")
-
-def send_wechat_work(title, markdown_body):
-    """通过 企业微信机器人 推送到微信群/企业微信"""
-    webhook_key = os.environ.get("WECHAT_WORK_WEBHOOK_KEY")
-    if not webhook_key:
-        return
-        
-    url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={webhook_key}"
-    
-    # 企微机器人 markdown 有长度限制 (4096字节)，如果太长需要截断
-    if len(markdown_body.encode('utf-8')) > 4000:
-        markdown_body = markdown_body[:1300] + "\n\n...(内容过长已截断，请查看邮件完整版)"
-        
-    data = {
-        "msgtype": "markdown",
-        "markdown": {
-            "content": f"# {title}\n\n{markdown_body}"
-        }
-    }
-    try:
-        requests.post(url, json=data, timeout=10, proxies=GLOBAL_PROXIES)
-        print("已推送到企业微信")
-    except Exception as e:
-        print(f"企业微信推送失败: {e}")
-
-def send_wechat_clawbot(markdown_body):
-    """通过 Clawbot 推送到微信文件传输助手/特定联系人"""
-    # Clawbot 需要运行在本地的代理/服务，通常通过给定的 URL/Token 触发
-    # 假设它是提供了一个标准的 HTTP POST 接口，这里提供一个通用的接入方式
-    webhook_url = os.environ.get("CLAWBOT_WEBHOOK_URL")
-    if not webhook_url:
-        return
-        
-    data = {
-        "msg_type": "text", # 很多非官方微信机器人只支持纯文本，如果支持 markdown 可修改
-        "content": markdown_body 
-    }
-    try:
-        requests.post(webhook_url, json=data, timeout=10, proxies=GLOBAL_PROXIES)
-        print("已推送到微信 (Clawbot)")
-    except Exception as e:
-        print(f"微信推送失败 (Clawbot): {e}")
-
-def build_markdown_for_wechat(results, conclusion, trends, monthly_total, monthly_b2b):
-    """生成适用于微信推送的 Markdown 格式"""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    current_month_name = datetime.now(timezone.utc).strftime("%Y年%m月")
-    
-    if not results:
-        return f"Pain-Point Digest ({today})", "过去 24 小时内没有发现有价值的痛点信号。"
-
-    title = f"💡 痛点挖掘日报 ({len(results)}个信号)"
-    
-    md_parts = [
-        f"### 💡 今日洞察",
-        f"{conclusion}\n",
-        f"---",
-        f"### 🎯 痛点列表"
-    ]
-
-    for i, r in enumerate(results):
-        stars = "★" * r.get("score", 0)
-        b2b_tag = " **[B2B]** " if r.get("is_b2b") else ""
-        
-        md_parts.append(f"**{i+1}. {r['title']}**")
-        md_parts.append(f"> 来源: {r['source']} | 评分: {stars}{b2b_tag} | [原文链接]({r['url']})\n")
-        md_parts.append(f"- **😫 痛点:** {r.get('pain', '')}")
-        md_parts.append(f"- **🚀 点子:** {r.get('product_idea', '')}")
-        md_parts.append(f"- **🎯 获客:** {r.get('target_users', '')}")
-        md_parts.append(f"- **💻 技术栈:** {r.get('tech_stack', '')}\n")
-
-    md_parts.append(f"---")
-    md_parts.append(f"### 🔥 7天痛点聚类")
-    md_parts.append(f"{trends}\n")
-    
-    md_parts.append(f"---")
-    md_parts.append(f"### 📊 本月统计 ({current_month_name})")
-    md_parts.append(f"累计挖掘 **{monthly_total}** 个高分点子，其中 **{monthly_b2b}** 个具备 B2B 潜力。")
-
-    return title, "\n".join(md_parts)
-
-
 # ---------- Main ----------
 def main():
     init_db()
@@ -822,28 +704,9 @@ def main():
     
     print(f"Got {len(results)} scored signals.")
 
-    # 1. 发送邮件
     subject, html = build_email(results, conclusion, trends, monthly_total, monthly_b2b)
     send_email(subject, html)
     print("Email sent.")
-    
-    # 2. 推送到微信
-    wx_title, wx_md = build_markdown_for_wechat(results, conclusion, trends, monthly_total, monthly_b2b)
-    
-    if os.environ.get("SERVERCHAN_SENDKEY"):
-        send_wechat_serverchan(wx_title, wx_md)
-        
-    if os.environ.get("PUSHPLUS_TOKEN"):
-        send_wechat_pushplus(wx_title, wx_md)
-        
-    if os.environ.get("WECHAT_WORK_WEBHOOK_KEY"):
-        send_wechat_work(wx_title, wx_md)
-        
-    if os.environ.get("CLAWBOT_WEBHOOK_URL"):
-        # 由于微信原生不支持Markdown渲染，在推给Clawbot时，你可以选择推原生Markdown，或者做一个纯文本去标签处理
-        # 这里直接传入包含标题的拼接文本
-        clawbot_text = f"【{wx_title}】\n\n{wx_md}"
-        send_wechat_clawbot(clawbot_text)
 
 if __name__ == "__main__":
     main()

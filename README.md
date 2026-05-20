@@ -1,11 +1,55 @@
 # Pain-Point Digest
 
-每天自动抓取 Hacker News、Reddit (r/webdev, r/SaaS, r/indiehackers, r/Entrepreneur) 和
-Indie Hackers,用关键词预过滤 + Claude 判断,把真实痛点和产品机会发到你邮箱。
+一个每天自动运行的痛点情报脚本。
 
-## 部署步骤
+它会从开发者和创业社区抓取最近 24 小时的帖子，先用关键词做预过滤，再调用 `DeepSeek` 做二次判断，把真正值得看的用户抱怨、未满足需求和潜在产品机会整理成一封邮件发给你。
 
-### 1. 把代码推到 GitHub
+## 它会做什么
+
+- 抓取多个公开社区的数据源：
+  - Hacker News
+  - Reddit
+  - Indie Hackers
+  - V2EX
+  - Product Hunt Discussions
+  - Dev.to
+  - GitHub Discussions
+- 用关键词筛掉大部分噪音，控制模型调用成本
+- 让 `DeepSeek` 给每条候选内容打分，并输出：
+  - 痛点总结
+  - 可做的产品方向
+  - 第一批潜在用户
+  - 竞品与差异化
+  - MVP 技术栈建议
+- 把结果保存到数据库，顺带生成：
+  - 今日洞察
+  - 7 天痛点聚类
+  - 当月累计统计
+- 最终通过邮件发送日报
+
+## 适合谁
+
+- 独立开发者
+- 在找 SaaS / API / 小工具方向的人
+- 想低成本持续跟踪用户需求的人
+
+如果你每天没时间刷几十个社区，但又不想错过真实需求，这个项目就是给这种场景准备的。
+
+## 工作方式
+
+完整流程如下：
+
+1. 定时抓取各平台最近内容
+2. 用 `PAIN_KEYWORDS` 先做一轮便宜的粗筛
+3. 把候选帖子交给 `DeepSeek` 精筛和结构化分析
+4. 结果写入 `SQLite` 或 `PostgreSQL`
+5. 生成 HTML 邮件并发送
+
+默认通过 GitHub Actions 每天自动执行一次。
+
+## 部署方式
+
+### 1. 推到 GitHub
 
 ```bash
 git init
@@ -14,69 +58,138 @@ git commit -m "init"
 gh repo create pain-point-digest --private --source=. --push
 ```
 
-或者手动在 GitHub 网页上创建一个 private repo,再 push。**一定要 private**——不然你的关键词配置和邮件地址别人能看到。
+也可以手动建一个私有仓库再 push。建议一定使用 private repo，避免邮箱配置、数据库地址和代理信息暴露。
 
-### 2. 准备好这些东西
+### 2. 准备依赖
 
-**Anthropic API key**:
-- 去 https://console.anthropic.com/ 注册,创建一个 API key
-- 充值 5 美元应该够你跑两三个月
+你需要两类外部能力：
 
-**SMTP 邮件服务**(用来发邮件给自己):
+**1. DeepSeek API**
 
-最简单的方案是 Gmail + 应用专用密码:
-- 开启两步验证: https://myaccount.google.com/security
-- 生成应用密码: https://myaccount.google.com/apppasswords
-- SMTP_HOST = `smtp.gmail.com`
-- SMTP_PORT = `587`
-- SMTP_USER = 你的 Gmail 地址
-- SMTP_PASS = 刚生成的 16 位应用密码(不是 Gmail 登录密码!)
-- EMAIL_TO = 收件邮箱(可以就是你自己)
+- 去 [DeepSeek 平台](https://platform.deepseek.com/) 获取 API Key
+- 本项目通过 Anthropic 兼容接口访问 `DeepSeek`
+- 环境变量名称使用 `DEEPSEEK_API_KEY`
 
-其他选择:Resend(每天 100 封免费,API 也简单)、Mailgun、SendGrid、自己的邮箱服务商。
+**2. SMTP 邮件服务**
 
-### 3. 在 GitHub repo 里配置 Secrets
+最省事的是 Gmail + 应用专用密码：
 
-进入 repo → Settings → Secrets and variables → Actions → New repository secret,
-依次添加:
+- 开启两步验证: <https://myaccount.google.com/security>
+- 生成应用密码: <https://myaccount.google.com/apppasswords>
+- `SMTP_HOST=smtp.gmail.com`
+- `SMTP_PORT=587`
+- `SMTP_USER=你的 Gmail 地址`
+- `SMTP_PASS=16 位应用专用密码`
+- `EMAIL_TO=收件邮箱`
 
-| Name | Value |
+你也可以换成其他支持 SMTP 的邮箱服务。
+
+### 3. 配置 GitHub Secrets
+
+进入仓库：
+
+`Settings -> Secrets and variables -> Actions -> New repository secret`
+
+至少配置以下变量：
+
+| Name | 说明 |
 |---|---|
-| `ANTHROPIC_API_KEY` | sk-ant-... |
-| `SMTP_HOST` | smtp.gmail.com |
-| `SMTP_PORT` | 587 |
-| `SMTP_USER` | your@gmail.com |
-| `SMTP_PASS` | 应用专用密码 |
-| `EMAIL_TO` | your@gmail.com |
+| `DEEPSEEK_API_KEY` | DeepSeek API Key |
+| `SMTP_HOST` | SMTP 地址 |
+| `SMTP_PORT` | SMTP 端口，通常是 `587` |
+| `SMTP_USER` | SMTP 用户名 / 发件邮箱 |
+| `SMTP_PASS` | SMTP 密码或应用专用密码 |
+| `EMAIL_TO` | 收件邮箱 |
 
-### 4. 手动跑一次测试
+可选配置：
 
-进入 repo → Actions → Daily Pain-Point Digest → Run workflow
+| Name | 说明 |
+|---|---|
+| `PGSQL_URL` | PostgreSQL 连接串；不配时默认使用本地 `SQLite` |
+| `PROXY` | HTTP/HTTPS 代理地址 |
 
-跑完几分钟后,看 Actions 日志,确认有没有报错;检查邮箱是不是收到了。
-没收到先翻垃圾邮件。
+### 4. 手动测试一次
 
-### 5. 之后就自动每天跑了
+进入 GitHub 仓库的 `Actions` 页面，找到 `Daily Pain-Point Digest`，点击 `Run workflow`。
 
-默认时间是 UTC 13:00(北京时间 21:00,美东上午 9 点)。改时间改 `.github/workflows/digest.yml`
-里的 cron 表达式即可。
+第一次建议重点检查两件事：
 
-## 你可能想调的地方
+- Actions 日志里是否有抓取或 API 报错
+- 邮箱是否正常收到日报
 
-- **`SUBREDDITS`**:加你自己关心的 sub,比如 `selfhosted`、`devops`、`programming`
-- **`PAIN_KEYWORDS`**:观察一周后,会发现某些关键词噪音大,可以删掉;也会发现自己漏掉了一些好的关键词,加上
-- **`claude_classify` 里的 prompt**:这是质量的关键,跑一周后根据邮件内容微调
-- **cron 时间**:如果你想早上喝咖啡时读,改成你早上的时间
+如果没收到邮件，先看垃圾邮件箱，再检查 SMTP 配置。
 
-## 成本估算
+### 5. 自动运行
 
-- GitHub Actions: 免费(每月 2000 分钟,这个脚本一次 2-3 分钟)
-- Anthropic API: 关键词过滤后通常每天 20-50 条进 Claude,每条几百 token,
-  **月成本 1-3 美元**
-- Gmail SMTP: 免费
+当前工作流默认每天 `UTC 13:00` 执行一次。
+
+如果你想修改时间，编辑 `.github/workflows/digest.yml` 里的 cron 表达式即可。
+
+## 本地运行
+
+先安装依赖：
+
+```bash
+pip install -r requirements.txt
+```
+
+然后配置好环境变量，再执行：
+
+```bash
+python digest.py
+```
+
+本地运行适合用来：
+
+- 调试关键词
+- 调 prompt
+- 检查某个数据源是否失效
+
+## 关键配置
+
+你最可能会改的地方都在 `digest.py`：
+
+- `SUBREDDITS`: 想监听哪些 subreddit
+- `PAIN_KEYWORDS`: 哪些词算作高概率痛点信号
+- `LOOKBACK_HOURS`: 看最近多少小时的帖子
+- `deepseek_classify()` 里的 prompt: 决定模型筛选风格和输出格式
+
+如果你跑了一周，通常最值得调的是 `PAIN_KEYWORDS` 和 `deepseek_classify()` 的提示词。
+
+## 数据存储
+
+项目支持两种存储模式：
+
+- 默认：`SQLite`
+- 可选：`PostgreSQL`
+
+如果你主要跑在 GitHub Actions，建议尽量使用 `PostgreSQL`，否则 CI 环境中的本地 `SQLite` 文件通常不会长期保留，7 天趋势和月统计会不稳定。
+
+## 成本预估
+
+- GitHub Actions：通常够用
+- DeepSeek API：主要成本项，但整体仍然比较低
+- SMTP：如果用自带邮箱服务，通常接近免费
+
+实际成本取决于：
+
+- 抓取源数量
+- 关键词命中率
+- 每天送进模型的候选条数
+
+## 输出结果长什么样
+
+每天邮件大致包含三部分：
+
+- 今日洞察：当天高分痛点的总结判断
+- 痛点列表：每条对应原帖、痛点、产品点子、获客和技术栈
+- 趋势统计：7 天聚类 + 月度累计
+
+这不是“帮你自动决定做什么”的工具，而是“帮你更快发现值得进一步验证的方向”。
 
 ## 重要提醒
 
-这个工具的价值,**不在于 Claude 总结得多好,而在于把你每天该读的东西从几千条压缩到 20 条**。
-**总结只是索引,真正有价值的洞察永远在原帖和评论区。** 看到感兴趣的一定要点链接进去读原文,
-特别是评论区——很多时候楼主的痛点是一回事,评论区里别人补充的痛点反而更值得做。
+- 这类工具的价值不在于模型写得多漂亮，而在于先把信息量压下来
+- 邮件里的结论只能作为索引，不能替代原帖
+- 真正要不要做，还是得点进原文和评论区继续验证
+- 评论区往往比楼主正文更有价值，尤其适合找真实使用场景和付费线索
