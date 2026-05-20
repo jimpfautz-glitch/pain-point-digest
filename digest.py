@@ -551,8 +551,8 @@ def analyze_trends(client, recent_points):
         
     try:
         resp = client.messages.create(
-            model="deepseek-chat",
-            max_tokens=1500,
+            model="deepseek-v4-pro",
+            max_tokens=5000,
             messages=[{"role": "user", "content": prompt}],
         )
         return resp.content[0].text
